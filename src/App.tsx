@@ -1,5 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
-import { supabase, type Task } from './lib/supabase';
+import { useState, useEffect } from 'react';
 import {
   Plus,
   Trash2,
@@ -8,25 +7,40 @@ import {
   Moon,
   Sun,
   ClipboardList,
-  Loader2,
 } from 'lucide-react';
+type Task = {
+  id: string;
+  title: string;
+  completed: boolean;
+  createdAt: string;
+};
 
-function getSessionId(): string {
-  const key = 'task_session_id';
-  let id = localStorage.getItem(key);
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem(key, id);
+const TASKS_STORAGE_KEY = 'tasks';
+
+function getStoredTasks(): Task[] {
+  const raw = localStorage.getItem(TASKS_STORAGE_KEY);
+  if (!raw) return [];
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed.filter(
+      (task): task is Task =>
+        typeof task?.id === 'string' &&
+        typeof task?.title === 'string' &&
+        typeof task?.completed === 'boolean' &&
+        typeof task?.createdAt === 'string'
+    );
+  } catch {
+    return [];
   }
-  return id;
 }
-
-const SESSION_ID = getSessionId();
 
 type Filter = 'all' | 'active' | 'completed';
 
 export default function App() {
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasks, setTasks] = useState<Task[]>(() => getStoredTasks());
   const [input, setInput] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [dark, setDark] = useState(() => {
@@ -34,10 +48,6 @@ export default function App() {
     if (stored !== null) return stored === 'true';
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
-  const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [togglingId, setTogglingId] = useState<string | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{
     type: 'delete' | 'clear';
     taskId?: string;
@@ -48,84 +58,51 @@ export default function App() {
     localStorage.setItem('dark_mode', String(dark));
   }, [dark]);
 
-  const fetchTasks = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('*')
-      .eq('user_session', SESSION_ID)
-      .order('created_at', { ascending: false });
-
-    if (!error && data) setTasks(data as Task[]);
-    setLoading(false);
-  }, []);
-
   useEffect(() => {
-    fetchTasks();
-  }, [fetchTasks]);
+    localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(tasks));
+  }, [tasks]);
 
-  async function addTask(e: React.FormEvent) {
+  function addTask(e: React.FormEvent) {
     e.preventDefault();
     const title = input.trim();
     if (!title) return;
 
-    setAdding(true);
-    const { data, error } = await supabase
-      .from('tasks')
-      .insert({ title, user_session: SESSION_ID, completed: false })
-      .select()
-      .single();
-
-    if (!error && data) {
-      setTasks((prev) => [data as Task, ...prev]);
-      setInput('');
-    }
-    setAdding(false);
+    const task: Task = {
+      id: crypto.randomUUID(),
+      title,
+      completed: false,
+      createdAt: new Date().toISOString(),
+    };
+    setTasks((prev) => [task, ...prev]);
+    setInput('');
   }
 
-  async function toggleTask(task: Task) {
-    setTogglingId(task.id);
-    const { error } = await supabase
-      .from('tasks')
-      .update({ completed: !task.completed })
-      .eq('id', task.id);
-
-    if (!error) {
-      setTasks((prev) =>
-        prev.map((t) => (t.id === task.id ? { ...t, completed: !t.completed } : t))
-      );
-    }
-    setTogglingId(null);
+  function toggleTask(task: Task) {
+    setTasks((prev) =>
+      prev.map((t) => (t.id === task.id ? { ...t, completed: !t.completed } : t))
+    );
   }
 
-  async function deleteTask(id: string) {
-    setDeletingId(id);
-    const { error } = await supabase.from('tasks').delete().eq('id', id);
-    if (!error) setTasks((prev) => prev.filter((t) => t.id !== id));
-    setDeletingId(null);
+  function deleteTask(id: string) {
+    setTasks((prev) => prev.filter((t) => t.id !== id));
   }
 
-  async function confirmDelete(id: string) {
+  function confirmDelete(id: string) {
     setConfirmDialog({ type: 'delete', taskId: id });
   }
 
-  async function confirmClearCompleted() {
+  function confirmClearCompleted() {
     setConfirmDialog({ type: 'clear' });
   }
 
-  async function proceedWithDelete() {
+  function proceedWithDelete() {
     if (confirmDialog?.type === 'delete' && confirmDialog.taskId) {
-      await deleteTask(confirmDialog.taskId);
+      deleteTask(confirmDialog.taskId);
     }
     setConfirmDialog(null);
   }
 
-  async function proceedWithClear() {
-    const completedIds = tasks.filter((t) => t.completed).map((t) => t.id);
-    if (!completedIds.length) {
-      setConfirmDialog(null);
-      return;
-    }
-    await supabase.from('tasks').delete().in('id', completedIds);
+  function proceedWithClear() {
     setTasks((prev) => prev.filter((t) => !t.completed));
     setConfirmDialog(null);
   }
@@ -173,14 +150,10 @@ export default function App() {
             />
             <button
               type="submit"
-              disabled={adding || !input.trim()}
+              disabled={!input.trim()}
               className="px-4 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-sm flex items-center gap-1.5 transition-colors shadow-sm"
             >
-              {adding ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Plus className="w-4 h-4" />
-              )}
+              <Plus className="w-4 h-4" />
               Add
             </button>
           </div>
@@ -210,11 +183,7 @@ export default function App() {
 
         {/* Task list */}
         <div className="space-y-2">
-          {loading ? (
-            <div className="flex items-center justify-center py-16">
-              <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
-            </div>
-          ) : filtered.length === 0 ? (
+          {filtered.length === 0 ? (
             <div className="text-center py-16">
               <div className="w-14 h-14 rounded-2xl bg-gray-100 dark:bg-gray-900 flex items-center justify-center mx-auto mb-4">
                 <ClipboardList className="w-7 h-7 text-gray-300 dark:text-gray-600" />
@@ -239,13 +208,10 @@ export default function App() {
               >
                 <button
                   onClick={() => toggleTask(task)}
-                  disabled={togglingId === task.id}
-                  className="flex-shrink-0 transition-transform active:scale-90 disabled:opacity-50"
+                  className="flex-shrink-0 transition-transform active:scale-90"
                   aria-label={task.completed ? 'Mark incomplete' : 'Mark complete'}
                 >
-                  {togglingId === task.id ? (
-                    <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
-                  ) : task.completed ? (
+                  {task.completed ? (
                     <CheckCircle2 className="w-5 h-5 text-blue-500" />
                   ) : (
                     <Circle className="w-5 h-5 text-gray-300 dark:text-gray-600 hover:text-blue-400 transition-colors" />
@@ -264,15 +230,10 @@ export default function App() {
 
                 <button
                   onClick={() => confirmDelete(task.id)}
-                  disabled={deletingId === task.id}
-                  className="flex-shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 w-7 h-7 rounded-lg flex items-center justify-center text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-all disabled:opacity-30"
+                  className="flex-shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 w-7 h-7 rounded-lg flex items-center justify-center text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-all"
                   aria-label="Delete task"
                 >
-                  {deletingId === task.id ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Trash2 className="w-3.5 h-3.5" />
-                  )}
+                  <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             ))
